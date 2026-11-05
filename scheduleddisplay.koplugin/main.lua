@@ -21,7 +21,7 @@ local MAX = 24
 local STEP = 5
 local RAMP_MIN, RAMP_MAX, RAMP_STEP = 5, 60, 5
 local RAMP_INTERVAL = 0.05
-local VERSION = "0.2.0"
+local VERSION = "0.2.1"
 local AUTHOR = "yEs1do"
 
 local function clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
@@ -86,11 +86,24 @@ function ScheduledDisplay:cancelRamp()
     self.expected_w=nil
     self.ramp_token=(self.ramp_token or 0)+1
 end
-function ScheduledDisplay:apply(allow_smooth)
+function ScheduledDisplay:apply(allow_smooth, on_resume)
     local s=effective(self.schedule,now()); local tb=Device:hasFrontlight() and native(s.brightness,Powerd.fl_max) or nil
     local tw=hasWarmth() and native(s.warmth,Powerd.fl_warmth_max) or nil
     if not self.enabled and allow_smooth then return end
     self:cancelRamp()
+    if on_resume and tb~=nil then
+        -- AutoDim may still own the pre-dim brightness when Resume is broadcast.
+        -- Its delayed callback (or input-trap dismissal) would restore that stale
+        -- value after our correction. Finish its restore before applying ours;
+        -- this also clears its saved value, so later manual changes survive.
+        -- Leave AutoDim alone when this schedule does not manage brightness.
+        local autodim=self.ui and self.ui.autodim
+        if autodim and autodim.autodim_save_fl~=nil
+                and type(autodim.restoreFrontlight)=="function" then
+            logger.dbg("ScheduledDisplay: completing pending AutoDim restore before wake correction")
+            autodim:restoreFrontlight()
+        end
+    end
     if hasNight() and s.night_mode~=nil and s.night_mode~=UNCHANGED then self.ui:handleEvent(Event:new("SetNightMode",s.night_mode=="on")) end
     local cb=Device:hasFrontlight() and Powerd:frontlightIntensity() or nil
     local cw=hasWarmth() and Powerd:toNativeWarmth(Powerd:frontlightWarmth()) or nil
@@ -506,6 +519,6 @@ function ScheduledDisplay:onInputEvent()
     end
 end
 function ScheduledDisplay:onSuspend()self:cancelRamp();if self.task then UIManager:unschedule(self.task);self.task=nil end end
-function ScheduledDisplay:onResume()if self.enabled then self:apply(false);self:reschedule()end end
+function ScheduledDisplay:onResume()if self.enabled then self:apply(false,true);self:reschedule()end end
 function ScheduledDisplay:onCloseWidget()self:onSuspend()end
 return ScheduledDisplay

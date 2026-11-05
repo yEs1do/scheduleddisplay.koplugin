@@ -1,0 +1,40 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LuaJIT
+        run: sudo apt-get update && sudo apt-get install -y luajit
+      - name: Fetch pinned KOReader modules
+        env:
+          # KOReader v2026.07.2; only these modules are executed by the tests.
+          KOREADER_REV: 9192014d8bd82a91dc1012473be0f238dedfdb54
+        run: |
+          for path in plugins/autodim.koplugin/main.lua frontend/device/generic/powerd.lua; do
+            mkdir -p "$RUNNER_TEMP/koreader/$(dirname "$path")"
+            curl --fail --silent --show-error --location --retry 3 \
+              "https://raw.githubusercontent.com/koreader/koreader/$KOREADER_REV/$path" \
+              -o "$RUNNER_TEMP/koreader/$path"
+          done
+      - name: Run wake and display regressions
+        env:
+          KOREADER_DIR: ${{ runner.temp }}/koreader
+        run: luajit tests/run.lua
+      - name: Check plugin Lua syntax
+        run: |
+          find scheduleddisplay.koplugin -name '*.lua' -print0 | while IFS= read -r -d '' file; do
+            luajit -b "$file" /dev/null
+          done
